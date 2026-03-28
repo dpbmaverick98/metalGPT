@@ -18,14 +18,13 @@ stable-baselines3==2.2.1
 gymnasium==0.29.1
 torch==2.1.1
 
-# AI/LLM integration (optional - for AI chat)
-# Option 1: Direct SDKs (current)
-openai>=1.3.0
-anthropic>=0.7.0
+# Vercel AI SDK (unified AI interface)
+ai-sdk-python[openai,anthropic]>=0.1.0
 
-# Option 2: Vercel AI SDK Python (recommended)
-# ai-sdk-python
-# Then use: from ai_sdk import generate_text, openai
+# Utilities
+pydantic==2.5.2
+python-dotenv==1.0.0
+aiofiles==23.2.1
 
 # Utilities
 pydantic==2.5.2

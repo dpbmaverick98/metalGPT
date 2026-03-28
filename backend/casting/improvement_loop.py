@@ -1,11 +1,14 @@
 """
 AI Improvement Loop - Automatic defect detection and iterative optimization
+Uses Vercel AI SDK for structured output and streaming
 """
 import asyncio
 import numpy as np
 from typing import Dict, List, Optional, Callable, Tuple
 from dataclasses import dataclass
 from enum import Enum
+
+from chat.ai_provider import get_ai_provider, ImprovementPlan, DesignAction
 
 
 class DefectType(Enum):
@@ -348,13 +351,46 @@ class AIImprovementLoop:
         ai_client=None
     ) -> List[str]:
         """
-        Generate improvement suggestions
-        Uses AI if available, otherwise rule-based
+        Generate improvement suggestions using Vercel AI SDK structured output
         """
-        if ai_client:
-            return await self._ai_generate_improvements(
-                defects, current_design, geometry, sim_results, ai_client
-            )
+        provider = get_ai_provider()
+        
+        if provider.is_available():
+            try:
+                # Use structured output for type-safe improvements
+                plan = await provider.generate_improvement_plan(
+                    defects=[{
+                        "type": d.type.value,
+                        "severity": d.severity,
+                        "position": d.position,
+                        "suggested_fix": d.suggested_fix
+                    } for d in defects],
+                    current_design=current_design,
+                    geometry=geometry
+                )
+                
+                # Convert structured actions to improvement strings
+                improvements = []
+                for action in plan.actions:
+                    if action.action_type == "increase_riser_size":
+                        improvements.append(f"increase_riser_size:{action.target_id}:{action.parameters.get('scale_factor', 1.2)}")
+                    elif action.action_type == "add_riser":
+                        pos = [action.parameters.get('x', 0), action.parameters.get('y', 0), action.parameters.get('z', 0)]
+                        improvements.append(f"add_riser_at:{pos}")
+                    elif action.action_type == "move_riser":
+                        pos = [action.parameters.get('x', 0), action.parameters.get('y', 0), action.parameters.get('z', 0)]
+                        improvements.append(f"move_riser:{action.target_id}:{pos}")
+                    elif action.action_type == "increase_neck":
+                        improvements.append(f"increase_neck:{action.target_id}:{action.parameters.get('scale_factor', 1.2)}")
+                    elif action.action_type == "add_chill":
+                        pos = [action.parameters.get('x', 0), action.parameters.get('y', 0), action.parameters.get('z', 0)]
+                        improvements.append(f"add_chill_at:{pos}")
+                
+                return improvements
+                
+            except Exception as e:
+                print(f"Structured improvement generation failed: {e}")
+                return self._rule_generate_improvements(defects, current_design, geometry)
         else:
             return self._rule_generate_improvements(defects, current_design, geometry)
     

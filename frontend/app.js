@@ -20,6 +20,8 @@ class MetalGPTApp {
         this.risers = [];
         this.simulationResults = null;
         
+        this.hasStreamingMessage = false;
+        
         this.init();
     }
     
@@ -123,9 +125,15 @@ class MetalGPTApp {
     }
     
     handleWebSocketMessage(data) {
-        if (data.type === 'response') {
+        if (data.type === 'token') {
+            // Streaming token - append to current message
+            this.appendToLastMessage(data.token);
+        } else if (data.type === 'response') {
+            // Complete response
             this.hideTyping();
-            this.addMessage(data.text, 'ai');
+            if (!this.hasStreamingMessage) {
+                this.addMessage(data.text, 'ai');
+            }
             
             if (data.actions) {
                 this.addActionButtons(data.actions);
@@ -134,9 +142,26 @@ class MetalGPTApp {
             if (data.data) {
                 this.updateVisualization(data.data);
             }
+            this.hasStreamingMessage = false;
         } else if (data.type === 'progress') {
             this.updateProgress(data.data);
         }
+    }
+    
+    appendToLastMessage(token) {
+        const container = document.getElementById('chatMessages');
+        let lastMessage = container.lastElementChild;
+        
+        // Create new message if needed
+        if (!lastMessage || !lastMessage.classList.contains('ai') || !this.hasStreamingMessage) {
+            this.addMessage('', 'ai');
+            lastMessage = container.lastElementChild;
+            this.hasStreamingMessage = true;
+        }
+        
+        // Append token
+        lastMessage.innerHTML += token;
+        container.scrollTop = container.scrollHeight;
     }
     
     // ==================== CHAT INTERFACE ====================

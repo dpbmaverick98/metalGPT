@@ -1,32 +1,19 @@
 """
-AI Chat handler with Vercel AI SDK integration
-Unified interface for OpenAI, Anthropic, and other providers
+AI Chat handler using Vercel AI SDK
+Unified interface for all AI providers with streaming support
 """
 import json
 import os
 import re
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, AsyncGenerator
 
 from chat.ai_provider import get_ai_provider, AIProvider
-
-# Try to import AI libraries for fallback
-try:
-    import openai
-    HAS_OPENAI = True
-except ImportError:
-    HAS_OPENAI = False
-
-try:
-    import anthropic
-    HAS_ANTHROPIC = True
-except ImportError:
-    HAS_ANTHROPIC = False
 
 
 class AIChatHandler:
     """
-    AI-powered chat handler for MetalGPT
-    Uses Vercel AI SDK when available, falls back to rule-based
+    AI-powered chat handler using Vercel AI SDK
+    Supports streaming and structured output
     """
     
     def __init__(self):
@@ -38,25 +25,49 @@ class AIChatHandler:
         self.rule_handler = RuleBasedHandler()
         
         if self.use_ai:
-            print(f"✅ AI Chat initialized with {self.ai_provider.get_provider_name()}")
+            print(f"✅ AI Chat: Vercel AI SDK with {self.ai_provider.get_provider_name()}")
         else:
-            print("⚠️ No AI provider available. Using rule-based responses.")
-            print("   Set OPENAI_API_KEY or ANTHROPIC_API_KEY for AI chat.")
+            print("⚠️ No AI provider. Set OPENAI_API_KEY or ANTHROPIC_API_KEY")
     
     async def process_message(self, message: str, session_data: Dict,
                             websocket=None) -> Dict:
-        """
-        Process chat message with AI or rule-based fallback
-        """
-        # Add to conversation history
+        """Process chat message with AI or rule-based fallback"""
         self.conversation_history.append({"role": "user", "content": message})
         
-        # Try AI first if available
         if self.use_ai:
             try:
-                response = await self._get_ai_response(message, session_data)
-                self.conversation_history.append({"role": "assistant", "content": response["text"]})
-                return response
+                if websocket:
+                    # Stream response for WebSocket
+                    response_text = ""
+                    async for token in self._stream_ai_response(message, session_data):
+                        response_text += token
+                        await websocket.send_json({
+                            "type": "token",
+                            "token": token
+                        })
+                    
+                    # Send completion
+                    response = self._parse_ai_response(response_text, session_data)
+                    await websocket.send_json({
+                        "type": "response",
+                        "text": response["text"],
+                        "actions": response.get("actions", [])
+                    })
+                    
+                    self.conversation_history.append({
+                        "role": "assistant",
+                        "content": response_text
+                    })
+                    return response
+                else:
+                    # Non-streaming for HTTP
+                    response = await self._get_ai_response(message, session_data)
+                    self.conversation_history.append({
+                        "role": "assistant",
+                        "content": response["text"]
+                    })
+                    return response
+                    
             except Exception as e:
                 print(f"AI error: {e}. Falling back to rule-based.")
         
@@ -65,25 +76,32 @@ class AIChatHandler:
         self.conversation_history.append({"role": "assistant", "content": response.get("text", "")})
         return response
     
-    async def _get_ai_response(self, message: str, session_data: Dict) -> Dict:
-        """Get response from AI provider (Vercel AI SDK or direct)"""
-        
-        # Build system prompt with context
+    async def _stream_ai_response(self, message: str, 
+                                  session_data: Dict) -> AsyncGenerator[str, None]:
+        """Stream AI response token by token"""
         system_prompt = self._build_system_prompt(session_data)
         
-        # Use unified AI provider
+        async for token in self.ai_provider.stream(
+            prompt=message,
+            system=system_prompt,
+            temperature=0.7
+        ):
+            yield token
+    
+    async def _get_ai_response(self, message: str, session_data: Dict) -> Dict:
+        """Get complete AI response"""
+        system_prompt = self._build_system_prompt(session_data)
+        
         text = await self.ai_provider.generate(
             prompt=message,
             system=system_prompt,
             temperature=0.7
         )
         
-        # Parse response for actions
         return self._parse_ai_response(text, session_data)
     
     def _build_system_prompt(self, session_data: Dict) -> str:
-        """Build system prompt with current casting context"""
-        
+        """Build system prompt with casting context"""
         prompt = """You are MetalGPT, an expert AI assistant for metal casting design and optimization.
 
 Your capabilities:
@@ -127,34 +145,29 @@ When responding:
         return prompt
     
     def _parse_ai_response(self, text: str, session_data: Dict) -> Dict:
-        """
-        Parse AI response and extract actions
-        Looks for special markers in the response
-        """
+        """Parse AI response and extract actions"""
         response = {"text": text, "actions": [], "session_updates": {}}
         
-        # Check for action markers like [ACTION:optimize] or [ACTION:simulate]
+        # Check for action markers
         action_pattern = r'\[ACTION:(\w+)\]'
         actions = re.findall(action_pattern, text)
         
         for action in actions:
             if action == "optimize":
                 response["actions"].append({
-                    "type": "button",
-                    "label": "Optimize Design",
-                    "action": "optimize"
+                    "type": "button", "label": "Optimize Design", "action": "optimize"
                 })
             elif action == "simulate":
                 response["actions"].append({
-                    "type": "button", 
-                    "label": "Run Simulation",
-                    "action": "simulate"
+                    "type": "button", "label": "Run Simulation", "action": "simulate"
                 })
             elif action == "analyze":
                 response["actions"].append({
-                    "type": "button",
-                    "label": "Analyze",
-                    "action": "analyze"
+                    "type": "button", "label": "Analyze", "action": "analyze"
+                })
+            elif action == "improve":
+                response["actions"].append({
+                    "type": "button", "label": "🔁 Auto-Fix Defects", "action": "improve"
                 })
         
         # Remove action markers from displayed text
@@ -168,7 +181,7 @@ When responding:
 
 
 class RuleBasedHandler:
-    """Original rule-based handler as fallback"""
+    """Rule-based fallback handler"""
     
     def __init__(self):
         self.commands = {
@@ -365,7 +378,7 @@ class RuleBasedHandler:
             for d in defects[:3]:
                 response += f"  - {d['type'].replace('_', ' ').title()}: {d['severity']}\n"
                 response += f"    Position: {d['position']}\n\n"
-            response += "\nWould you like me to optimize to fix these defects?"
+            response += "\nWould you like me to run the improvement loop?"
         else:
             response += "✅ **No defects predicted!**\n\n"
             response += "The design looks good. Ready for production."
@@ -377,7 +390,7 @@ class RuleBasedHandler:
                 {"type": "button", "label": "View 3D Results", "action": "view_3d"},
                 {"type": "button", "label": "Export Report", "action": "export"}
             ] if not defects else [
-                {"type": "button", "label": "Re-optimize", "action": "optimize"}
+                {"type": "button", "label": "🔁 Auto-Fix Defects", "action": "improve"}
             ]
         }
     
@@ -424,7 +437,7 @@ class RuleBasedHandler:
         
         response += "**⚙️ Optimization:**\n"
         response += "- 'Optimize for aluminum' - AI designs risers and gating\n"
-        response += "- 'Add risers automatically' - Place risers at hot spots\n\n"
+        response += "- 'Run improvement loop' - Auto-fix defects iteratively\n\n"
         
         response += "**🔥 Simulation:**\n"
         response += "- 'Run simulation' - Predict solidification and defects\n"
@@ -453,7 +466,8 @@ class RuleBasedHandler:
             "text": "I see you have a casting loaded. I can:\n\n"
                     "1. **Analyze** - Check for hot spots and feeding zones\n"
                     "2. **Optimize** - AI designs risers and gating\n"
-                    "3. **Simulate** - Run solidification analysis\n\n"
+                    "3. **Simulate** - Run solidification analysis\n"
+                    "4. **Improve** - Auto-fix defects iteratively\n\n"
                     "What would you like to do?"
         }
     
@@ -475,5 +489,5 @@ class RuleBasedHandler:
         return None
 
 
-# Backwards compatibility - use AI handler as default
+# Backwards compatibility
 ChatHandler = AIChatHandler

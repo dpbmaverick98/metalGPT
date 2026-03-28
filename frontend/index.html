@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MetalGPT - AI Casting Optimization</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-primary: #0f0f1a;
+            --bg-secondary: #1a1a2e;
+            --bg-tertiary: #252542;
+            --accent-primary: #00d4ff;
+            --accent-secondary: #ff6b6b;
+            --accent-success: #4ecdc4;
+            --text-primary: #ffffff;
+            --text-secondary: #a0a0b0;
+            --border-color: #333355;
+        }
+
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .app {
+            display: grid;
+            grid-template-columns: 1fr 380px;
+            height: 100vh;
+        }
+
+        /* Main Viewer Area */
+        .viewer-section {
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 20px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .toolbar h1 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-right: auto;
+        }
+
+        .toolbar h1 span {
+            color: var(--accent-primary);
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn:hover {
+            background: var(--accent-primary);
+            color: var(--bg-primary);
+        }
+
+        .btn-primary {
+            background: var(--accent-primary);
+            color: var(--bg-primary);
+        }
+
+        .btn-primary:hover {
+            background: #00b8e0;
+        }
+
+        .viewer-container {
+            flex: 1;
+            position: relative;
+            background: linear-gradient(135deg, var(--bg-primary) 0%, #151525 100%);
+        }
+
+        #canvas3d {
+            width: 100%;
+            height: 100%;
+        }
+
+        .viewer-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(15, 15, 26, 0.9);
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            min-width: 200px;
+        }
+
+        .viewer-overlay h3 {
+            font-size: 12px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            margin-bottom: 10px;
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 5px 0;
+            font-size: 13px;
+        }
+
+        .stat-value {
+            color: var(--accent-primary);
+            font-weight: 500;
+        }
+
+        .drop-zone {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            padding: 60px 80px;
+            border: 2px dashed var(--border-color);
+            border-radius: 12px;
+            background: rgba(26, 26, 46, 0.8);
+            transition: all 0.3s;
+        }
+
+        .drop-zone.drag-over {
+            border-color: var(--accent-primary);
+            background: rgba(0, 212, 255, 0.1);
+        }
+
+        .drop-zone.hidden {
+            display: none;
+        }
+
+        .drop-zone .icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+
+        .drop-zone h2 {
+            font-size: 20px;
+            margin-bottom: 10px;
+        }
+
+        .drop-zone p {
+            color: var(--text-secondary);
+            font-size: 14px;
+        }
+
+        /* Chat Section */
+        .chat-section {
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-secondary);
+            border-left: 1px solid var(--border-color);
+        }
+
+        .chat-header {
+            padding: 15px 20px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .chat-header h2 {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .chat-header p {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .message {
+            max-width: 90%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .message.user {
+            align-self: flex-end;
+            background: var(--accent-primary);
+            color: var(--bg-primary);
+        }
+
+        .message.ai {
+            align-self: flex-start;
+            background: var(--bg-tertiary);
+        }
+
+        .message.ai h3 {
+            font-size: 14px;
+            margin-bottom: 8px;
+            color: var(--accent-primary);
+        }
+
+        .message.ai ul {
+            margin: 8px 0;
+            padding-left: 20px;
+        }
+
+        .message.ai li {
+            margin: 4px 0;
+        }
+
+        .message-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .message-actions .btn {
+            font-size: 12px;
+            padding: 6px 12px;
+        }
+
+        .typing-indicator {
+            display: none;
+            align-self: flex-start;
+            padding: 12px 16px;
+            background: var(--bg-tertiary);
+            border-radius: 12px;
+        }
+
+        .typing-indicator.active {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .typing-indicator span {
+            width: 8px;
+            height: 8px;
+            background: var(--text-secondary);
+            border-radius: 50%;
+            animation: bounce 1.4s infinite ease-in-out;
+        }
+
+        .typing-indicator span:nth-child(1) { animation-delay: 0s; }
+        .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes bounce {
+            0%, 80%, 100% { transform: translateY(0); }
+            40% { transform: translateY(-8px); }
+        }
+
+        .chat-input-area {
+            padding: 15px 20px;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .input-container {
+            display: flex;
+            gap: 10px;
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 4px;
+        }
+
+        .chat-input {
+            flex: 1;
+            border: none;
+            background: transparent;
+            color: var(--text-primary);
+            padding: 10px 12px;
+            font-size: 14px;
+            outline: none;
+        }
+
+        .chat-input::placeholder {
+            color: var(--text-secondary);
+        }
+
+        .send-btn {
+            padding: 10px 16px;
+            background: var(--accent-primary);
+            color: var(--bg-primary);
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        .send-btn:hover {
+            background: #00b8e0;
+        }
+
+        .quick-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+
+        .quick-actions .btn {
+            font-size: 11px;
+            padding: 5px 10px;
+        }
+
+        /* Progress overlay */
+        .progress-overlay {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(15, 15, 26, 0.95);
+            padding: 20px 30px;
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+            display: none;
+            min-width: 300px;
+        }
+
+        .progress-overlay.active {
+            display: block;
+        }
+
+        .progress-title {
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+
+        .progress-bar {
+            height: 6px;
+            background: var(--bg-tertiary);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent-primary), var(--accent-success));
+            border-radius: 3px;
+            transition: width 0.3s;
+            width: 0%;
+        }
+
+        .progress-text {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 8px;
+            text-align: center;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--bg-secondary);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #444466;
+        }
+
+        /* Responsive */
+        @media (max-width: 900px) {
+            .app {
+                grid-template-columns: 1fr;
+                grid-template-rows: 1fr 300px;
+            }
+            
+            .chat-section {
+                border-left: none;
+                border-top: 1px solid var(--border-color);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <!-- 3D Viewer Section -->
+        <div class="viewer-section">
+            <div class="toolbar">
+                <h1>🔩 <span>Metal</span>GPT</h1>
+                <button class="btn" onclick="app.uploadFile()">📁 Upload</button>
+                <button class="btn" onclick="app.analyze()">🔍 Analyze</button>
+                <button class="btn btn-primary" onclick="app.optimize()">⚡ Optimize</button>
+                <button class="btn" onclick="app.simulate()">🔥 Simulate</button>
+                <input type="file" id="fileInput" accept=".step,.stp,.stl" style="display:none">
+            </div>
+            
+            <div class="viewer-container">
+                <canvas id="canvas3d"></canvas>
+                
+                <div class="viewer-overlay" id="statsOverlay" style="display:none">
+                    <h3>Casting Stats</h3>
+                    <div class="stat-row">
+                        <span>Volume</span>
+                        <span class="stat-value" id="statVolume">-</span>
+                    </div>
+                    <div class="stat-row">
+                        <span>Hot Spots</span>
+                        <span class="stat-value" id="statHotspots">-</span>
+                    </div>
+                    <div class="stat-row">
+                        <span>Risers</span>
+                        <span class="stat-value" id="statRisers">-</span>
+                    </div>
+                    <div class="stat-row">
+                        <span>Yield</span>
+                        <span class="stat-value" id="statYield">-</span>
+                    </div>
+                </div>
+                
+                <div class="drop-zone" id="dropZone">
+                    <div class="icon">📦</div>
+                    <h2>Drop your casting model</h2>
+                    <p>Supports STEP, STP, and STL files</p>
+                </div>
+                
+                <div class="progress-overlay" id="progressOverlay">
+                    <div class="progress-title" id="progressTitle">Optimizing...</div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill"></div>
+                    </div>
+                    <div class="progress-text" id="progressText">0%</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Chat Section -->
+        <div class="chat-section">
+            <div class="chat-header">
+                <h2>💬 AI Assistant</h2>
+                <p>Ask me about casting design, materials, or simulation</p>
+            </div>
+            
+            <div class="chat-messages" id="chatMessages">
+                <div class="message ai">
+                    Hello! I'm MetalGPT, your AI casting assistant. Upload a STEP or STL file and I'll help you optimize the casting design with automated riser placement and solidification simulation.
+                </div>
+            </div>
+            
+            <div class="typing-indicator" id="typingIndicator">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+            
+            <div class="chat-input-area">
+                <div class="input-container">
+                    <input type="text" class="chat-input" id="chatInput" 
+                           placeholder="Type a message... (e.g., 'Optimize for aluminum')"
+                           onkeypress="if(event.key==='Enter')app.sendMessage()">
+                    <button class="send-btn" onclick="app.sendMessage()">Send</button>
+                </div>
+                <div class="quick-actions">
+                    <button class="btn" onclick="app.quickCommand('Analyze this casting')">Analyze</button>
+                    <button class="btn" onclick="app.quickCommand('Optimize for aluminum A356')">Optimize Al</button>
+                    <button class="btn" onclick="app.quickCommand('Run simulation')">Simulate</button>
+                    <button class="btn" onclick="app.quickCommand('Show results')">Results</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

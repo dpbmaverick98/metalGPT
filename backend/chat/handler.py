@@ -1,13 +1,235 @@
 """
-Chat handler - Natural language interface for casting design
+AI Chat handler with OpenAI/Anthropic integration
+Falls back to rule-based system if no API key
 """
 import json
+import os
 import re
-from typing import Dict, Optional
+from typing import Dict, Optional, List
+
+# Try to import AI libraries
+try:
+    import openai
+    HAS_OPENAI = True
+except ImportError:
+    HAS_OPENAI = False
+
+try:
+    import anthropic
+    HAS_ANTHROPIC = True
+except ImportError:
+    HAS_ANTHROPIC = False
 
 
-class ChatHandler:
-    """Handle natural language commands for casting optimization"""
+class AIChatHandler:
+    """
+    AI-powered chat handler for MetalGPT
+    Uses OpenAI/Anthropic when available, falls back to rule-based
+    """
+    
+    def __init__(self):
+        self.openai_client = None
+        self.anthropic_client = None
+        self.use_ai = False
+        self.conversation_history: List[Dict] = []
+        
+        # Initialize AI clients if keys available
+        self._init_ai_clients()
+        
+        # Rule-based fallback
+        self.rule_handler = RuleBasedHandler()
+    
+    def _init_ai_clients(self):
+        """Initialize AI clients from environment"""
+        # OpenAI
+        openai_key = os.getenv("OPENAI_API_KEY")
+        if HAS_OPENAI and openai_key:
+            self.openai_client = openai.AsyncOpenAI(api_key=openai_key)
+            self.use_ai = True
+            print("✅ OpenAI client initialized")
+        
+        # Anthropic (Claude)
+        anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+        if HAS_ANTHROPIC and anthropic_key:
+            self.anthropic_client = anthropic.AsyncAnthropic(api_key=anthropic_key)
+            self.use_ai = True
+            print("✅ Anthropic client initialized")
+        
+        if not self.use_ai:
+            print("⚠️ No AI API keys found. Using rule-based responses.")
+            print("   Set OPENAI_API_KEY or ANTHROPIC_API_KEY for AI chat.")
+    
+    async def process_message(self, message: str, session_data: Dict,
+                            websocket=None) -> Dict:
+        """
+        Process chat message with AI or rule-based fallback
+        """
+        # Add to conversation history
+        self.conversation_history.append({"role": "user", "content": message})
+        
+        # Try AI first if available
+        if self.use_ai:
+            try:
+                response = await self._get_ai_response(message, session_data)
+                self.conversation_history.append({"role": "assistant", "content": response["text"]})
+                return response
+            except Exception as e:
+                print(f"AI error: {e}. Falling back to rule-based.")
+        
+        # Fallback to rule-based
+        response = await self.rule_handler.process_message(message, session_data, websocket)
+        self.conversation_history.append({"role": "assistant", "content": response.get("text", "")})
+        return response
+    
+    async def _get_ai_response(self, message: str, session_data: Dict) -> Dict:
+        """Get response from AI model"""
+        
+        # Build system prompt with context
+        system_prompt = self._build_system_prompt(session_data)
+        
+        # Build messages
+        messages = [
+            {"role": "system", "content": system_prompt},
+            *self.conversation_history[-10:]  # Last 10 messages for context
+        ]
+        
+        # Try Anthropic first (better for technical tasks)
+        if self.anthropic_client:
+            return await self._call_anthropic(messages, session_data)
+        
+        # Fall back to OpenAI
+        if self.openai_client:
+            return await self._call_openai(messages, session_data)
+        
+        raise RuntimeError("No AI client available")
+    
+    def _build_system_prompt(self, session_data: Dict) -> str:
+        """Build system prompt with current casting context"""
+        
+        prompt = """You are MetalGPT, an expert AI assistant for metal casting design and optimization.
+
+Your capabilities:
+1. Analyze casting geometry for hot spots and feeding requirements
+2. Design optimal riser (feeder) placement and sizing
+3. Design gating systems for mold filling
+4. Run solidification simulations (FDM method)
+5. Predict defects (shrinkage, porosity, cold shuts)
+6. Recommend materials and process parameters
+
+Key technical knowledge:
+- Chvorinov's Rule: Solidification time ∝ (Volume/Surface Area)²
+- Riser modulus must be 1.2-1.5× casting modulus to feed properly
+- Directional solidification: castings should freeze from thin to thick sections
+- Gating ratios: sprue:runner:ingate typically 1:2:4 or 1:4:4
+- Materials: Aluminum A356 (common), Steel (high shrinkage), Gray Iron (graphite expansion)
+
+When responding:
+- Be concise but technically accurate
+- Suggest specific actions the user can take
+- Reference the current casting data when available
+- Use markdown formatting for clarity
+"""
+        
+        # Add current session context
+        if session_data.get("geometry"):
+            geom = session_data["geometry"]
+            prompt += f"\n\nCURRENT CASTING:\n"
+            prompt += f"- Volume: {geom.get('volume', 0):.0f} mm³\n"
+            prompt += f"- Hot spots detected: {len(geom.get('hotspots', []))}\n"
+            prompt += f"- Complexity: {geom.get('complexity', 'unknown')}\n"
+        
+        if session_data.get("material"):
+            prompt += f"- Material: {session_data['material']}\n"
+        
+        if session_data.get("risers"):
+            prompt += f"- Risers placed: {len(session_data['risers'])}\n"
+        
+        prompt += "\nAvailable actions: analyze, optimize, simulate, set_material, upload"
+        
+        return prompt
+    
+    async def _call_anthropic(self, messages: List[Dict], session_data: Dict) -> Dict:
+        """Call Anthropic Claude API"""
+        
+        # Convert to Anthropic format
+        system_msg = None
+        chat_messages = []
+        
+        for m in messages:
+            if m["role"] == "system":
+                system_msg = m["content"]
+            else:
+                chat_messages.append({
+                    "role": m["role"],
+                    "content": m["content"]
+                })
+        
+        response = await self.anthropic_client.messages.create(
+            model="claude-3-sonnet-20240229",
+            max_tokens=1000,
+            system=system_msg,
+            messages=chat_messages
+        )
+        
+        text = response.content[0].text
+        return self._parse_ai_response(text, session_data)
+    
+    async def _call_openai(self, messages: List[Dict], session_data: Dict) -> Dict:
+        """Call OpenAI API"""
+        
+        response = await self.openai_client.chat.completions.create(
+            model="gpt-4o-mini",  # or gpt-4o for better quality
+            messages=messages,
+            max_tokens=1000,
+            temperature=0.7
+        )
+        
+        text = response.choices[0].message.content
+        return self._parse_ai_response(text, session_data)
+    
+    def _parse_ai_response(self, text: str, session_data: Dict) -> Dict:
+        """
+        Parse AI response and extract actions
+        Looks for special markers in the response
+        """
+        response = {"text": text, "actions": [], "session_updates": {}}
+        
+        # Check for action markers like [ACTION:optimize] or [ACTION:simulate]
+        action_pattern = r'\[ACTION:(\w+)\]'
+        actions = re.findall(action_pattern, text)
+        
+        for action in actions:
+            if action == "optimize":
+                response["actions"].append({
+                    "type": "button",
+                    "label": "Optimize Design",
+                    "action": "optimize"
+                })
+            elif action == "simulate":
+                response["actions"].append({
+                    "type": "button", 
+                    "label": "Run Simulation",
+                    "action": "simulate"
+                })
+            elif action == "analyze":
+                response["actions"].append({
+                    "type": "button",
+                    "label": "Analyze",
+                    "action": "analyze"
+                })
+        
+        # Remove action markers from displayed text
+        response["text"] = re.sub(action_pattern, '', text).strip()
+        
+        return response
+    
+    def clear_history(self):
+        """Clear conversation history"""
+        self.conversation_history = []
+
+
+class RuleBasedHandler:
+    """Original rule-based handler as fallback"""
     
     def __init__(self):
         self.commands = {
@@ -20,43 +242,28 @@ class ChatHandler:
             r"set.*material|use.*material|aluminum|steel|iron": "handle_set_material",
             r"help|what.*can.*do|commands": "handle_help",
         }
-        
+    
     async def process_message(self, message: str, session_data: Dict,
                             websocket=None) -> Dict:
-        """
-        Process a chat message and return response
-        
-        Args:
-            message: User's natural language input
-            session_data: Current session state
-            websocket: Optional WebSocket for streaming responses
-        
-        Returns:
-            Response dict with text, data, and actions
-        """
+        """Process message with regex patterns"""
         message_lower = message.lower()
         
-        # Check for commands
         for pattern, handler_name in self.commands.items():
             if re.search(pattern, message_lower):
                 handler = getattr(self, handler_name)
                 return await handler(message, session_data, websocket)
         
-        # Default: conversational response
         return await self.handle_conversation(message, session_data)
     
     async def handle_upload(self, message: str, session_data: Dict, 
                           websocket=None) -> Dict:
-        """Handle file upload request"""
         return {
             "text": "Please upload your STEP or STL file using the upload button, or drag and drop it here.",
-            "actions": [{"type": "prompt_upload"}],
-            "session_updates": {}
+            "actions": [{"type": "prompt_upload"}]
         }
     
     async def handle_analyze(self, message: str, session_data: Dict,
                            websocket=None) -> Dict:
-        """Handle geometry analysis request"""
         if not session_data.get("geometry"):
             return {
                 "text": "Please upload a casting model first so I can analyze it.",
@@ -91,22 +298,17 @@ class ChatHandler:
     
     async def handle_optimize(self, message: str, session_data: Dict,
                             websocket=None) -> Dict:
-        """Handle optimization request"""
         if not session_data.get("geometry"):
             return {
                 "text": "Please upload a casting model first.",
                 "actions": [{"type": "prompt_upload"}]
             }
         
-        # Detect material from message
         material = self._detect_material(message) or session_data.get("material", "aluminum_a356")
         
         response = f"🔧 **Starting Optimization**\n\n"
         response += f"Material: {material.replace('_', ' ').title()}\n"
         response += "Running AI optimization to place risers and design gating...\n\n"
-        
-        # In real implementation, this would trigger the optimizer
-        # and stream progress via WebSocket
         
         return {
             "text": response,
@@ -116,7 +318,6 @@ class ChatHandler:
     
     async def handle_add_risers(self, message: str, session_data: Dict,
                               websocket=None) -> Dict:
-        """Handle riser addition request"""
         if not session_data.get("geometry"):
             return {
                 "text": "Please upload a casting model first.",
@@ -149,7 +350,6 @@ class ChatHandler:
     
     async def handle_simulate(self, message: str, session_data: Dict,
                             websocket=None) -> Dict:
-        """Handle simulation request"""
         if not session_data.get("geometry"):
             return {
                 "text": "Please upload a casting model first.",
@@ -180,7 +380,6 @@ class ChatHandler:
     
     async def handle_show_results(self, message: str, session_data: Dict,
                                 websocket=None) -> Dict:
-        """Handle results display request"""
         results = session_data.get("simulation_results")
         
         if not results:
@@ -217,7 +416,6 @@ class ChatHandler:
     
     async def handle_set_material(self, message: str, session_data: Dict,
                                 websocket=None) -> Dict:
-        """Handle material selection"""
         material = self._detect_material(message)
         
         if material:
@@ -248,7 +446,6 @@ class ChatHandler:
     
     async def handle_help(self, message: str, session_data: Dict,
                         websocket=None) -> Dict:
-        """Show help message"""
         response = "🤖 **MetalGPT Help**\n\n"
         response += "I can help you optimize metal casting designs. Here's what I can do:\n\n"
         
@@ -274,8 +471,6 @@ class ChatHandler:
         return {"text": response}
     
     async def handle_conversation(self, message: str, session_data: Dict) -> Dict:
-        """Handle general conversation"""
-        # Check if we have a model loaded
         if not session_data.get("geometry"):
             return {
                 "text": "Hello! I'm MetalGPT, your AI casting assistant.\n\n"
@@ -287,7 +482,6 @@ class ChatHandler:
                         "What casting are you working on?"
             }
         
-        # We have a model - be helpful about next steps
         return {
             "text": "I see you have a casting loaded. I can:\n\n"
                     "1. **Analyze** - Check for hot spots and feeding zones\n"
@@ -297,7 +491,6 @@ class ChatHandler:
         }
     
     def _detect_material(self, message: str) -> Optional[str]:
-        """Detect material from message text"""
         message_lower = message.lower()
         
         materials = {
@@ -313,3 +506,7 @@ class ChatHandler:
                     return material
         
         return None
+
+
+# Backwards compatibility - use AI handler as default
+ChatHandler = AIChatHandler

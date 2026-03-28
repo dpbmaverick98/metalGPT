@@ -1,13 +1,15 @@
 """
-AI Chat handler with OpenAI/Anthropic integration
-Falls back to rule-based system if no API key
+AI Chat handler with Vercel AI SDK integration
+Unified interface for OpenAI, Anthropic, and other providers
 """
 import json
 import os
 import re
 from typing import Dict, Optional, List
 
-# Try to import AI libraries
+from chat.ai_provider import get_ai_provider, AIProvider
+
+# Try to import AI libraries for fallback
 try:
     import openai
     HAS_OPENAI = True
@@ -24,39 +26,21 @@ except ImportError:
 class AIChatHandler:
     """
     AI-powered chat handler for MetalGPT
-    Uses OpenAI/Anthropic when available, falls back to rule-based
+    Uses Vercel AI SDK when available, falls back to rule-based
     """
     
     def __init__(self):
-        self.openai_client = None
-        self.anthropic_client = None
-        self.use_ai = False
+        self.ai_provider = get_ai_provider()
+        self.use_ai = self.ai_provider.is_available()
         self.conversation_history: List[Dict] = []
-        
-        # Initialize AI clients if keys available
-        self._init_ai_clients()
         
         # Rule-based fallback
         self.rule_handler = RuleBasedHandler()
-    
-    def _init_ai_clients(self):
-        """Initialize AI clients from environment"""
-        # OpenAI
-        openai_key = os.getenv("OPENAI_API_KEY")
-        if HAS_OPENAI and openai_key:
-            self.openai_client = openai.AsyncOpenAI(api_key=openai_key)
-            self.use_ai = True
-            print("✅ OpenAI client initialized")
         
-        # Anthropic (Claude)
-        anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-        if HAS_ANTHROPIC and anthropic_key:
-            self.anthropic_client = anthropic.AsyncAnthropic(api_key=anthropic_key)
-            self.use_ai = True
-            print("✅ Anthropic client initialized")
-        
-        if not self.use_ai:
-            print("⚠️ No AI API keys found. Using rule-based responses.")
+        if self.use_ai:
+            print(f"✅ AI Chat initialized with {self.ai_provider.get_provider_name()}")
+        else:
+            print("⚠️ No AI provider available. Using rule-based responses.")
             print("   Set OPENAI_API_KEY or ANTHROPIC_API_KEY for AI chat.")
     
     async def process_message(self, message: str, session_data: Dict,
@@ -82,26 +66,20 @@ class AIChatHandler:
         return response
     
     async def _get_ai_response(self, message: str, session_data: Dict) -> Dict:
-        """Get response from AI model"""
+        """Get response from AI provider (Vercel AI SDK or direct)"""
         
         # Build system prompt with context
         system_prompt = self._build_system_prompt(session_data)
         
-        # Build messages
-        messages = [
-            {"role": "system", "content": system_prompt},
-            *self.conversation_history[-10:]  # Last 10 messages for context
-        ]
+        # Use unified AI provider
+        text = await self.ai_provider.generate(
+            prompt=message,
+            system=system_prompt,
+            temperature=0.7
+        )
         
-        # Try Anthropic first (better for technical tasks)
-        if self.anthropic_client:
-            return await self._call_anthropic(messages, session_data)
-        
-        # Fall back to OpenAI
-        if self.openai_client:
-            return await self._call_openai(messages, session_data)
-        
-        raise RuntimeError("No AI client available")
+        # Parse response for actions
+        return self._parse_ai_response(text, session_data)
     
     def _build_system_prompt(self, session_data: Dict) -> str:
         """Build system prompt with current casting context"""
@@ -147,45 +125,6 @@ When responding:
         prompt += "\nAvailable actions: analyze, optimize, simulate, set_material, upload"
         
         return prompt
-    
-    async def _call_anthropic(self, messages: List[Dict], session_data: Dict) -> Dict:
-        """Call Anthropic Claude API"""
-        
-        # Convert to Anthropic format
-        system_msg = None
-        chat_messages = []
-        
-        for m in messages:
-            if m["role"] == "system":
-                system_msg = m["content"]
-            else:
-                chat_messages.append({
-                    "role": m["role"],
-                    "content": m["content"]
-                })
-        
-        response = await self.anthropic_client.messages.create(
-            model="claude-3-sonnet-20240229",
-            max_tokens=1000,
-            system=system_msg,
-            messages=chat_messages
-        )
-        
-        text = response.content[0].text
-        return self._parse_ai_response(text, session_data)
-    
-    async def _call_openai(self, messages: List[Dict], session_data: Dict) -> Dict:
-        """Call OpenAI API"""
-        
-        response = await self.openai_client.chat.completions.create(
-            model="gpt-4o-mini",  # or gpt-4o for better quality
-            messages=messages,
-            max_tokens=1000,
-            temperature=0.7
-        )
-        
-        text = response.choices[0].message.content
-        return self._parse_ai_response(text, session_data)
     
     def _parse_ai_response(self, text: str, session_data: Dict) -> Dict:
         """

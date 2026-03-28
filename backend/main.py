@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from casting.geometry import GeometryProcessor
 from casting.simulation import FDMSimulator
 from casting.optimizer import CastingOptimizer
+from casting.improvement_loop import AIImprovementLoop
 from chat.handler import ChatHandler
 
 app = FastAPI(title="MetalGPT API", version="0.1.0")
@@ -209,6 +210,67 @@ async def run_simulation(session_id: str):
         "solidification_time": results["solidification_time"],
         "porosity_map": results["porosity_map"],
         "message": f"Simulation complete. Defects: {len(results['defects'])}"
+    }
+
+
+@app.post("/api/improve")
+async def run_improvement_loop(
+    session_id: str,
+    material: str = "aluminum_a356",
+    max_iterations: int = 10,
+    websocket: WebSocket = None
+):
+    """
+    Run AI improvement loop - automatically optimize until defects eliminated
+    """
+    if session_id not in sessions:
+        return {"error": "Session not found"}
+    
+    session = sessions[session_id]
+    
+    # Initialize improvement loop
+    improvement_loop = AIImprovementLoop(max_iterations=max_iterations)
+    
+    # Progress callback
+    async def progress_callback(progress: dict):
+        progress["session_id"] = session_id
+        await send_progress(session_id, progress)
+    
+    # Get AI client if available
+    ai_client = None
+    if hasattr(chat_handler, 'anthropic_client'):
+        ai_client = chat_handler.anthropic_client
+    elif hasattr(chat_handler, 'openai_client'):
+        ai_client = chat_handler.openai_client
+    
+    # Run improvement loop
+    result = await improvement_loop.run_improvement_loop(
+        geometry=session["geometry"],
+        material=material,
+        simulator=simulator,
+        optimizer=optimizer,
+        ai_client=ai_client,
+        progress_callback=progress_callback
+    )
+    
+    # Update session with final design
+    session["risers"] = result["final_design"]["risers"]
+    session["gating"] = result["final_design"]["gating"]
+    session["simulation_results"] = result["final_simulation"]
+    session["improvement_history"] = result["iteration_history"]
+    
+    return {
+        "success": True,
+        "converged": result["converged"],
+        "iterations": result["iteration_count"],
+        "final_defects": len(result["final_defects"]),
+        "final_yield": result["final_design"]["yield"],
+        "risers": result["final_design"]["risers"],
+        "gating": result["final_design"]["gating"],
+        "iteration_history": result["iteration_history"],
+        "summary": result["summary"],
+        "message": f"Improvement complete after {result['iteration_count']} iterations. "
+                   f"{'✅ Defect-free!' if result['converged'] else '⚠️ ' + str(len(result['final_defects'])) + ' defects remain'}"
     }
 
 

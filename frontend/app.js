@@ -181,12 +181,18 @@ class MetalGPTApp {
     handleAction(action) {
         if (action.type === 'start_optimization') {
             this.optimize(action.material);
+        } else if (action.type === 'start_improvement_loop') {
+            this.runImprovementLoop(action.material);
         } else if (action.type === 'start_simulation') {
             this.simulate();
         } else if (action.action === 'optimize') {
             this.optimize();
+        } else if (action.action === 'improve') {
+            this.runImprovementLoop();
         } else if (action.action === 'simulate') {
             this.simulate();
+        } else if (action.action === 'analyze') {
+            this.analyze();
         } else if (action.action === 'view_3d') {
             this.showSimulationResults();
         }
@@ -426,12 +432,18 @@ class MetalGPTApp {
                     data.defects.slice(0, 3).forEach(d => {
                         message += `- ${d.type.replace(/_/g, ' ')} (${d.severity})\n`;
                     });
-                    message += '\nWould you like me to re-optimize?';
+                    message += '\nWould you like me to run the improvement loop?';
+                    
+                    this.addMessage(message, 'ai');
+                    this.addActionButtons([
+                        { type: 'button', label: '🔁 Auto-Fix Defects', action: 'improve' },
+                        { type: 'button', label: 'Manual Re-optimize', action: 'optimize' }
+                    ]);
                 } else {
                     message += '✅ No defects predicted!';
+                    this.addMessage(message, 'ai');
                 }
                 
-                this.addMessage(message, 'ai');
                 this.visualizeDefects(data.defects);
             } else {
                 this.addMessage(`Simulation failed: ${data.error}`, 'ai');
@@ -439,6 +451,71 @@ class MetalGPTApp {
         } catch (error) {
             this.hideProgress();
             this.addMessage('Simulation failed. Please try again.', 'ai');
+        }
+    }
+    
+    async runImprovementLoop(material = 'aluminum_a356') {
+        if (!this.sessionId) {
+            this.addMessage('Please upload a casting model first.', 'ai');
+            return;
+        }
+        
+        this.showProgress('🔄 Starting AI Improvement Loop...', 0);
+        this.addMessage('🔄 Running AI Improvement Loop...\n\nThis will automatically optimize until defects are eliminated.', 'ai');
+        
+        try {
+            const response = await fetch(`${this.apiUrl}/api/improve`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    session_id: this.sessionId,
+                    material: material,
+                    max_iterations: 10
+                })
+            });
+            
+            const data = await response.json();
+            this.hideProgress();
+            
+            if (data.success) {
+                this.risers = data.risers;
+                this.simulationResults = data.final_simulation;
+                this.updateStats({ 
+                    risers: data.risers.length, 
+                    yield: data.final_yield,
+                    defects: data.final_defects 
+                });
+                
+                // Build detailed message
+                let message = `✅ **Improvement Loop Complete**\n\n`;
+                message += `**Iterations:** ${data.iterations}\n`;
+                message += `**Final Defects:** ${data.final_defects}\n`;
+                message += `**Final Yield:** ${data.final_yield.toFixed(1f)}%\n\n`;
+                
+                if (data.converged) {
+                    message += '🎉 **Defect-free design achieved!**\n\n';
+                } else {
+                    message += '⚠️ Some defects remain after max iterations.\n\n';
+                }
+                
+                message += '**Iteration History:**\n';
+                data.iteration_history.forEach(ih => {
+                    message += `  Iter ${ih.iteration}: ${ih.defect_count} defects, ${ih.yield.toFixed(1)}% yield\n`;
+                });
+                
+                this.addMessage(message, 'ai');
+                this.visualizeRisers(data.risers);
+                
+                if (data.final_defects > 0) {
+                    this.visualizeDefects(data.final_simulation.defects);
+                }
+            } else {
+                this.addMessage(`Improvement loop failed: ${data.error}`, 'ai');
+            }
+        } catch (error) {
+            this.hideProgress();
+            this.addMessage('Improvement loop failed. Please try again.', 'ai');
+            console.error(error);
         }
     }
     

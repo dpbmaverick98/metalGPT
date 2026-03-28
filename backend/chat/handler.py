@@ -236,6 +236,7 @@ class RuleBasedHandler:
             r"upload|load|import.*file": "handle_upload",
             r"analyze|check|inspect": "handle_analyze",
             r"optimize|improve|better.*design": "handle_optimize",
+            r"improvement.*loop|auto.*optimize|fix.*defects": "handle_improvement_loop",
             r"add.*riser|place.*riser|riser.*needed": "handle_add_risers",
             r"simulate|run.*simulation|check.*solidification": "handle_simulate",
             r"show.*result|display|visualize": "handle_show_results",
@@ -314,6 +315,33 @@ class RuleBasedHandler:
             "text": response,
             "actions": [{"type": "start_optimization", "material": material}],
             "session_updates": {"material": material, "optimizing": True}
+        }
+    
+    async def handle_improvement_loop(self, message: str, session_data: Dict,
+                                     websocket=None) -> Dict:
+        """Handle AI improvement loop request"""
+        if not session_data.get("geometry"):
+            return {
+                "text": "Please upload a casting model first.",
+                "actions": [{"type": "prompt_upload"}]
+            }
+        
+        material = self._detect_material(message) or session_data.get("material", "aluminum_a356")
+        
+        response = "🔄 **AI Improvement Loop**\n\n"
+        response += "I'll automatically:\n"
+        response += "1. Run initial optimization\n"
+        response += "2. Simulate solidification\n"
+        response += "3. Detect defects\n"
+        response += "4. AI analyzes and suggests fixes\n"
+        response += "5. Apply improvements\n"
+        response += "6. Repeat until defect-free or max iterations\n\n"
+        response += "This may take a few minutes..."
+        
+        return {
+            "text": response,
+            "actions": [{"type": "start_improvement_loop", "material": material}],
+            "session_updates": {"material": material, "improving": True}
         }
     
     async def handle_add_risers(self, message: str, session_data: Dict,
